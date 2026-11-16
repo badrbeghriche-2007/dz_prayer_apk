@@ -2,10 +2,13 @@ import asyncio
 import ctypes
 from datetime import datetime, timedelta, timezone
 import inspect
+import json
 import os
+import ssl
 import tempfile
 import threading
-import requests
+import urllib.parse
+import urllib.request
 import flet as ft
 
 # توقيت الجزائر الرسمي الدائم (UTC+1) يعمل على Windows و Android بدون مكتبات إضافية
@@ -21,6 +24,38 @@ CENTER = getattr(Alignment, "CENTER", getattr(Alignment, "center", None))
 DropdownOption = getattr(
     ft, "DropdownOption", getattr(getattr(ft, "dropdown", None), "Option", None)
 )
+
+
+def http_get_json(url: str, params: dict = None, timeout: int = 12) -> dict:
+    """جلب بيانات JSON باستخدام مكتبة Python المدمجة (urllib) للعمل على الأندرويد بدون requests."""
+    if params:
+        url = f"{url}?{urllib.parse.urlencode(params)}"
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (Linux; Android 14) RafiqAlMuslim/1.0"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        ctx = ssl._create_unverified_context()
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+
+def http_get_bytes(url: str, timeout: int = 15) -> bytes:
+    """تحميل ملفات الصوت باستخدام مكتبة Python المدمجة بدون الحاجة لمكتبة requests."""
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (Linux; Android 14) RafiqAlMuslim/1.0"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read()
+    except Exception:
+        ctx = ssl._create_unverified_context()
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+            return resp.read()
 
 
 def make_dropdown(label: str, value: str, option_labels: list, callback):
@@ -285,22 +320,22 @@ EVENING_ADHKAR = [
 class AudioController:
     """مشغل صوتيات مدمج لتشغيل الأذان وتلاوة القرآن على Windows و Android."""
 
-    def __init__(self):
+    def __init__(self, page: ft.Page):
+        self.page = page
         self.is_playing = False
         self.temp_dir = tempfile.gettempdir()
 
     def play_url(self, url: str, tag: str = "islamic_audio"):
-        def _worker():
-            try:
-                self.stop()
-                local_file = os.path.join(self.temp_dir, f"{tag}.mp3")
-                if not os.path.exists(local_file) or tag != "adhan":
-                    resp = requests.get(url, timeout=15)
-                    resp.raise_for_status()
-                    with open(local_file, "wb") as f:
-                        f.write(resp.content)
+        if hasattr(ctypes, "windll"):
+            def _worker():
+                try:
+                    self.stop()
+                    local_file = os.path.join(self.temp_dir, f"{tag}.mp3")
+                    if not os.path.exists(local_file) or tag != "adhan":
+                        audio_bytes = http_get_bytes(url, timeout=15)
+                        with open(local_file, "wb") as f:
+                            f.write(audio_bytes)
 
-                if hasattr(ctypes, "windll"):
                     try:
                         import winsound
                         winsound.MessageBeep(winsound.MB_ICONASTERISK)
@@ -316,10 +351,19 @@ class AudioController:
                     )
                     mci("play islamic_player", None, 0, 0)
                     self.is_playing = True
+                except Exception:
+                    pass
+
+            threading.Thread(target=_worker, daemon=True).start()
+        else:
+            # على هاتف الأندرويد: تشغيل ملف الصوت مباشرة عبر مشغل النظام أو UrlLauncher
+            try:
+                if hasattr(self.page, "launch_url"):
+                    self.page.launch_url(url)
+                elif hasattr(ft, "UrlLauncher"):
+                    self.page.run_task(ft.UrlLauncher().launch_url, url)
             except Exception:
                 pass
-
-        threading.Thread(target=_worker, daemon=True).start()
 
     def stop(self):
         try:
@@ -335,9 +379,7 @@ class AudioController:
 def fetch_prayer_times(city: str):
     url = "https://api.aladhan.com/v1/timingsByCity"
     params = {"city": city, "country": "Algeria", "method": 19}
-    response = requests.get(url, params=params, timeout=10)
-    response.raise_for_status()
-    return response.json()["data"]
+    return http_get_json(url, params=params, timeout=10)["data"]
 
 
 def get_next_prayer(timings: dict, now_dz: datetime):
@@ -395,7 +437,7 @@ def main(page: ft.Page):
     page.window.width = 440
     page.window.height = 880
 
-    audio_ctrl = AudioController()
+    audio_ctrl = AudioController(page)
 
     state = {
         "target_dt": None,
@@ -861,11 +903,9 @@ def main(page: ft.Page):
             surah_verses_text.value = "جاري جلب الآيات الكريمة..."
             page.update()
 
-            resp = requests.get(
+            s_data = http_get_json(
                 f"https://api.alquran.cloud/v1/surah/{surah_number}", timeout=12
-            )
-            resp.raise_for_status()
-            s_data = resp.json()["data"]
+            )["data"]
 
             surah_title_text.value = (
                 f"۞ {s_data['name']} ({s_data['numberOfAyahs']} آية) ۞"
@@ -906,9 +946,9 @@ def main(page: ft.Page):
 
     def load_all_surahs_list():
         try:
-            resp = requests.get("https://api.alquran.cloud/v1/surah", timeout=10)
-            resp.raise_for_status()
-            all_s = resp.json()["data"]
+            all_s = http_get_json(
+                "https://api.alquran.cloud/v1/surah", timeout=10
+            )["data"]
             surah_dropdown.options = [
                 DropdownOption(
                     key=f"{s['number']} - {s['name']}",
@@ -1001,9 +1041,7 @@ def main(page: ft.Page):
     def fetch_more_nawawi_hadiths():
         try:
             url = "https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/ara-nawawi.min.json"
-            resp = requests.get(url, timeout=10)
-            resp.raise_for_status()
-            items = resp.json().get("hadiths", [])
+            items = http_get_json(url, timeout=10).get("hadiths", [])
             if items:
                 loaded = []
                 for h in items:
@@ -1415,7 +1453,7 @@ def main(page: ft.Page):
         make_nav_btn(0, "المواقيت", ft.Icons.ACCESS_TIME_FILLED),
         make_nav_btn(1, "القرآن", ft.Icons.MENU_BOOK),
         make_nav_btn(2, "الأحاديث", ft.Icons.AUTO_AWESOME),
-        make_nav_btn(3, "الأذكار والمسبحة", ft.Icons. SPA),
+        make_nav_btn(3, "الأذكار والمسبحة", ft.Icons.SPA),
     ]
 
     nav_bar = ft.Row(spacing=6, controls=nav_buttons)
