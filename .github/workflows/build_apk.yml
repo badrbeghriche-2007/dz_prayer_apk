@@ -1,0 +1,38 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Install Flet CLI
+        run: |
+          python -m pip install --upgrade pip
+          pip install "flet[all]" requests
+
+      - name: Build APK with Flet
+        run: flet build apk --yes --verbose --project "RafiqAlMuslimDZ"
+
+      - name: Upload APK for Download
+        uses: actions/upload-artifact@v4
+        with:
+          name: Rafiq-AlMuslim-DZ-APK
+          path: build/apk/
