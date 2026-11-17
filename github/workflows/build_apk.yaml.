@@ -2,7 +2,6 @@ name: Build Android APK
 
 on:
   push:
-    branches: [ "main", "master" ]
   workflow_dispatch:
 
 jobs:
@@ -26,7 +25,7 @@ jobs:
       - name: Install Flet CLI
         run: |
           python -m pip install --upgrade pip
-          pip install "flet[all]" requests
+          pip install "flet[all]"
 
       - name: Build APK with Flet
         run: flet build apk --yes --verbose --project "RafiqAlMuslimDZ"
@@ -36,3 +35,4 @@ jobs:
         with:
           name: Rafiq-AlMuslim-DZ-APK
           path: build/apk/
+          overwrite: true
